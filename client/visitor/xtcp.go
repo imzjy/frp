@@ -21,6 +21,7 @@ import (
 	"io"
 	"net"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -282,6 +283,47 @@ func (sv *XTCPVisitor) makeNatHole() {
 	}
 	xl.Infof("nathole prepare success, nat type: %s, behavior: %s, addresses: %v, assistedAddresses: %v",
 		prepareResult.NatType, prepareResult.Behavior, prepareResult.Addrs, prepareResult.AssistedAddrs)
+
+	xl.Infof("nathole filter out IPs: %v", sv.cfg.TunnelIpsFilters)
+	var filteredAddrs []string
+	for _, addr := range prepareResult.AssistedAddrs {
+		matched := false
+		for _, cidr := range sv.cfg.TunnelIpsFilters {
+			_, cidrNet, err := net.ParseCIDR(cidr)
+			if err != nil {
+				// log the error or handle it as needed
+				xl.Warnf("nathole filter config error: %s", err)
+				continue
+			}
+			addrParts := strings.Split(addr, ":")
+			var addrIP net.IP
+			if len(addrParts) > 1 { // Likely an IPv6 address
+				addrIP = net.ParseIP(addrParts[0])
+			} else { // Likely an IPv4 address
+				addrIP = net.ParseIP(addr)
+			}
+			if addrIP == nil {
+				// Handle the error, possibly log it or continue to the next iteration
+				xl.Warnf("nathole filter config error: invalid IP address: %s", addr)
+				continue
+			}
+
+			xl.Infof("nathole filterIp: %v, %v, addr: %v", cidrNet.Mask, cidrNet.IP, addrIP)
+			if addrIP.Mask(cidrNet.Mask).Equal(cidrNet.IP) {
+				matched = true
+				// Assuming "xl" is a logger instance and "Infof" is a method to log info messages.
+				// Make sure "xl" is properly initialized and in scope.
+				xl.Infof("assistedAddresses: %v hit the filterIp: %v", addr, cidr)
+				break
+			}
+		}
+		if !matched {
+			filteredAddrs = append(filteredAddrs, addr)
+		}
+	}
+
+	prepareResult.AssistedAddrs = filteredAddrs
+	xl.Infof("nathole filtered , assistedAddresses: %v", prepareResult.AssistedAddrs)
 
 	listenConn := prepareResult.ListenConn
 
